@@ -1,0 +1,101 @@
+------------------
+--Fetching the 10k reports as PDF from S3
+CREATE OR REPLACE STAGE AWS_EXT_STAGE_10K
+URL = 's3://secfilespoc/10-K/'
+CREDENTIALS = (AWS_KEY_ID = 'AKIA3BVQT6DU5TTZFO6W'
+               AWS_SECRET_KEY = '2s6ItNPEgzIZgU0CkAslJYHcmUYctXrlJ4eEqM3Z');
+               
+LIST @AWS_EXT_STAGE_10k;
+------------------
+--READING THE SONGLE PDF USING os.path.join Statically
+create or replace function pdf_read_10k()
+returns variant
+language python
+runtime_version=3.8
+packages = ('snowflake-snowpark-python','PyPDF2')
+IMPORTS=('@AWS_EXT_STAGE_10K/_2014-02-26.pdf')
+handler = 'pdfparser'
+AS
+$$
+from snowflake.snowpark.files import SnowflakeFile
+from PyPDF2 import PdfReader
+import io, os,sys
+def pdfparser():
+    text = ""
+    with open(os.path.join(sys._xoptions["snowflake_import_directory"],'_2014-02-26.pdf'), "rb") as f:
+        file = io.BytesIO(f.read())
+        reader = PdfReader(file,strict=False)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    return text
+$$;
+
+select pdf_read_10k();
+------------------
+--READING THE SONGLE PDF USING os.path.join with one variable 
+--ISSUE(IN Imports we are not able to use variable)
+create or replace function pdf_read_10k(b STRING)
+returns variant
+language python
+runtime_version=3.8
+packages = ('snowflake-snowpark-python','PyPDF2')
+IMPORTS=('@AWS_EXT_STAGE_10K/_2014-02-26.pdf')
+handler = 'pdfparser'
+AS
+$$
+from snowflake.snowpark.files import SnowflakeFile
+from PyPDF2 import PdfReader
+import io, os,sys
+def pdfparser(b):
+    text = ""
+    with open(os.path.join(sys._xoptions["snowflake_import_directory"],b), "rb") as f:
+        file = io.BytesIO(f.read())
+        reader = PdfReader(file,strict=False)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    return text
+$$;
+
+select pdf_read_10k('_2014-02-26.pdf');
+select pdf_read_10k('@AWS_EXT_STAGE_10K/_2014-02-26.pdf');
+select pdf_read_10k('@AWS_EXT_STAGE_10K/_2014-02-26.pdf','_2014-02-26.pdf');
+------------------
+--CREATING A TABLE FOR THE PDF READING TEXT 
+CREATE OR REPLACE TABLE sentiment_results AS
+SELECT
+  relative_path
+  , pdf_read_10k(build_scoped_file_url(@AWS_EXT_STAGE_10K, relative_path)) AS sentiment
+FROM directory(@AWS_EXT_STAGE_10K);
+------------------
+CREATE OR REPLACE TABLE sentiment_results AS
+SELECT
+  relative_path
+  , pdf_read_10k() AS sentiment
+FROM directory(@AWS_EXT_STAGE_10K);
+------------------
+--USING SNOWFLAKE FILE OPEN METHOD
+CREATE OR REPLACE FUNCTION DEMO.PUBLIC.TEST_NEW("FILE_PATH" VARCHAR(16777216))
+RETURNS VARIANT
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.8'
+PACKAGES = ('snowflake-snowpark-python','PyPDF2')
+HANDLER = 'pdfparser'
+AS '
+from snowflake.snowpark.files import SnowflakeFile
+from PyPDF2 import PdfReader
+import io, os,sys
+
+def pdfparser(file_path):
+    text = ""
+    with SnowflakeFile.open(file_path, ''rb'') as f:
+        file = io.BytesIO(f.read())
+        reader = PdfReader(file,strict=False)
+        for page in reader.pages:
+            text += page.extract_text() + "\\n"
+    return text
+';
+
+SELECT test_new(build_scoped_file_url(@AWS_EXT_STAGE_10K, '_2014-02-26.pdf'));
+SELECT test_new(build_scoped_file_url(@AWS_EXT_STAGE_10K, '_2015-02-26.pdf')); --"10-K 1 tsla-10k_20141231.htm 10-K 
+LIST @AWS_EXT_STAGE_10K;
+------------------
